@@ -416,6 +416,62 @@ class VinylSourceRepository:
         await self.session.flush()
         return vs
 
+    async def get_urls_for_source(
+        self, source_id: uuid.UUID, scraped_before: datetime | None = None
+    ) -> list[tuple[uuid.UUID, str]]:
+        """Return (vinyl_source.id, external_url) pairs for a given source.
+
+        If *scraped_before* is provided, only rows whose ``scraped_at`` is
+        older than that timestamp are returned (i.e. stale records that need
+        a price/availability refresh).
+        """
+        stmt = select(VinylSource.id, VinylSource.external_url).where(
+            VinylSource.source_id == source_id,
+        )
+        if scraped_before is not None:
+            stmt = stmt.where(VinylSource.scraped_at < scraped_before)
+        result = await self.session.execute(stmt)
+        return list(result.all())
+
+    async def update_price(
+        self,
+        vinyl_source_id: uuid.UUID,
+        price: Decimal,
+        currency: str,
+        in_stock: bool,
+    ) -> None:
+        """Update only price, currency, in_stock, and scraped_at for a
+        single VinylSource row.  This is used by the weekly price-refresh
+        job and intentionally does NOT touch the parent Vinyl record so
+        that enrichment pipelines are not re-triggered and already-merged
+        data stays intact.
+        """
+        await self.session.execute(
+            update(VinylSource)
+            .where(VinylSource.id == vinyl_source_id)
+            .values(
+                price=price,
+                currency=currency,
+                in_stock=in_stock,
+                scraped_at=datetime.now(timezone.utc),
+            )
+        )
+
+    async def mark_out_of_stock(self, vinyl_source_id: uuid.UUID) -> None:
+        """Mark a VinylSource as out-of-stock and bump scraped_at.
+
+        Used when the product page returns 404 (removed from the shop).
+        The last-known price is preserved for historical reference.
+        """
+        await self.session.execute(
+            update(VinylSource)
+            .where(VinylSource.id == vinyl_source_id)
+            .values(
+                in_stock=False,
+                scraped_at=datetime.now(timezone.utc),
+            )
+        )
+
 
 class GenreRepository:
     def __init__(self, session: AsyncSession):

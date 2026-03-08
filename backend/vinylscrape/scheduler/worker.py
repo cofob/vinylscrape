@@ -257,6 +257,108 @@ async def run_scrape(
     return imported
 
 
+# Sentinel returned by _refresh_price when the product page is gone (404).
+_GONE = object()
+
+
+async def _refresh_price(
+    scraper: BaseScraper,
+    vinyl_source_id: object,
+    detail_url: str,
+    semaphore: asyncio.Semaphore,
+) -> tuple[object, ScrapedVinylDetail | object | None]:
+    """Scrape a detail page for price/stock refresh only.
+
+    Returns ``(vinyl_source_id, detail)`` on success,
+    ``(vinyl_source_id, _GONE)`` when the page 404s (product removed), or
+    ``(vinyl_source_id, None)`` on transient/unexpected errors.
+    """
+    async with semaphore:
+        try:
+            detail = await scraper.scrape_detail(detail_url)
+            return vinyl_source_id, detail
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                logger.info("Product page gone (404), marking out-of-stock: %s", detail_url)
+                return vinyl_source_id, _GONE
+            logger.warning("Price refresh HTTP %d for %s", exc.response.status_code, detail_url)
+            return vinyl_source_id, None
+        except Exception:
+            logger.warning("Price refresh failed for %s", detail_url)
+            return vinyl_source_id, None
+
+
+async def run_price_update(
+    source: Source,
+    registry: ScraperRegistry,
+    session_factory: async_sessionmaker[AsyncSession],
+    concurrency: int = 3,
+    scrape_delay: float = 1.0,
+) -> int:
+    """Re-scrape all known URLs for *source* and update only price/availability.
+
+    This is designed to run as a weekly job.  It intentionally:
+    - does NOT create new Vinyl records,
+    - does NOT touch vinyl scalar fields (artist, title, label, …),
+    - does NOT reset ``enrichment_attempted_at``,
+    - does NOT re-upload images to S3,
+    so that enrichment pipelines are never re-triggered and already-merged
+    data stays intact.
+
+    Returns the number of vinyl_source rows that were refreshed.
+    """
+    scraper = registry.get_scraper(source.scraper_key)
+    semaphore = asyncio.Semaphore(concurrency)
+    refreshed = 0
+
+    # Collect all known URLs for this source that are older than 1 week.
+    since = datetime.now(timezone.utc) - timedelta(weeks=1)
+    async with session_factory() as session:
+        vs_repo = VinylSourceRepository(session)
+        rows = await vs_repo.get_urls_for_source(source.id, scraped_before=since)
+
+    if not rows:
+        logger.info("No stale URLs to refresh for %s", source.name)
+        return 0
+
+    logger.info("Refreshing prices for %d URLs from %s", len(rows), source.name)
+
+    # Process in batches to keep memory bounded and respect rate-limits.
+    batch_size = 50
+    for batch_start in range(0, len(rows), batch_size):
+        batch = rows[batch_start : batch_start + batch_size]
+
+        if batch_start > 0 and scrape_delay > 0:
+            await asyncio.sleep(scrape_delay)
+
+        tasks = [_refresh_price(scraper, vs_id, url, semaphore) for vs_id, url in batch]
+        results = await asyncio.gather(*tasks)
+
+        for vs_id, detail in results:
+            if detail is None:
+                continue
+            try:
+                async with session_factory() as session:
+                    vs_repo = VinylSourceRepository(session)
+                    if detail is _GONE:
+                        # Product page removed — mark out-of-stock, keep
+                        # last-known price so historical data is preserved.
+                        await vs_repo.mark_out_of_stock(vs_id)
+                    else:
+                        await vs_repo.update_price(
+                            vinyl_source_id=vs_id,
+                            price=detail.price,
+                            currency=detail.currency,
+                            in_stock=detail.in_stock,
+                        )
+                    await session.commit()
+                    refreshed += 1
+            except Exception:
+                logger.exception("Failed to update price for vinyl_source %s", vs_id)
+
+    return refreshed
+
+
 async def _enrich_one(
     item: EnrichmentItem,
     session_factory: async_sessionmaker[AsyncSession],
@@ -563,13 +665,33 @@ async def ensure_sources(session_factory: async_sessionmaker[AsyncSession]) -> N
         await session.commit()
 
 
+_CYCLE_INTERVAL = timedelta(weeks=1)
+
+
 async def main(
     skip_crawl: bool = False,
     skip_enrichment: bool = False,
     skip_image_enrichment: bool = False,
     skip_image_generation: bool = False,
 ) -> None:
-    """Main entry point for the worker process."""
+    """Main entry point for the worker process.
+
+    Runs the full pipeline in a loop forever with a 1-week pause between
+    cycles.  Each cycle:
+
+    1. Crawl listing pages for **new** products (``run_scrape``).
+    2. Enrich new records (MusicBrainz, Exa, YouTube).
+    3. Download cover art for records that lack images.
+    4. Backfill slugs.
+    5. Generate OG preview images.
+    6. **Price refresh** — re-scrape all *already-known* URLs whose
+       ``scraped_at`` is older than 1 week and update only price,
+       currency, ``in_stock``, and ``scraped_at``.  This step does NOT
+       create new Vinyl records, does NOT touch enrichment fields, and
+       does NOT re-upload images, so enrichment pipelines are never
+       re-triggered and already-merged data stays intact.  404 responses
+       mark the ``vinyl_source`` row as out-of-stock.
+    """
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -592,86 +714,111 @@ async def main(
 
     await ensure_sources(session_factory)
 
-    if not skip_crawl:
+    while True:
+        logger.info("=== Starting worker cycle ===")
+
+        # 1. Crawl listing pages for new products
+        if not skip_crawl:
+            async with session_factory() as session:
+                source_repo = SourceRepository(session)
+                sources = await source_repo.get_enabled()
+
+            for source in sources:
+                if registry.has_scraper(source.scraper_key):
+                    logger.info("Starting scrape for %s", source.name)
+                    count = await run_scrape(
+                        source,
+                        registry,
+                        session_factory,
+                        image_storage,
+                        concurrency=config.scrape_concurrent,
+                        scrape_delay=config.scrape_delay,
+                    )
+                    logger.info("Scraped %d items from %s", count, source.name)
+        else:
+            logger.info("Skipping crawl (--skip-crawl)")
+
+        # 2. Enrich new records
+        if not skip_enrichment:
+            logger.info("Starting enrichment...")
+            total_enriched = 0
+            batch_size = 50
+            while True:
+                enriched = await run_enrichment(session_factory, pipeline, limit=batch_size)
+                total_enriched += enriched
+                if enriched < batch_size:
+                    break
+                logger.info("Enriched %d records so far...", total_enriched)
+            logger.info("Enriched %d records total", total_enriched)
+        else:
+            logger.info("Skipping enrichment (--skip-enrichment)")
+
+        # 3. Download cover art from MusicBrainz CAA
+        if not skip_image_enrichment:
+            logger.info("Enriching images from MusicBrainz Cover Art Archive...")
+            total_img = 0
+            batch_size = 50
+            while True:
+                enriched = await enrich_images(session_factory, image_storage, limit=batch_size)
+                total_img += enriched
+                if enriched < batch_size:
+                    break
+                logger.info("Enriched %d images so far...", total_img)
+            logger.info("Enriched %d images total", total_img)
+        else:
+            logger.info("Skipping image enrichment (--skip-image-enrichment)")
+
+        # 4. Backfill slugs
+        logger.info("Backfilling slugs...")
+        total_slugged = 0
+        while True:
+            slugged = await backfill_slugs(session_factory, limit=200)
+            total_slugged += slugged
+            if slugged < 200:
+                break
+            logger.info("Slugified %d records so far...", total_slugged)
+        logger.info("Slugified %d records total", total_slugged)
+
+        # 5. Generate OG preview images
+        if not skip_image_generation:
+            logger.info("Generating OG preview images...")
+            total_og = 0
+            while True:
+                generated = await generate_og_images(session_factory, og_generator, limit=50)
+                total_og += generated
+                if generated < 50:
+                    break
+                logger.info("Generated %d OG images so far...", total_og)
+            logger.info("Generated %d OG images total", total_og)
+        else:
+            logger.info("Skipping OG image generation (--skip-image-generation)")
+
+        # 6. Price refresh — re-scrape existing URLs for price/availability
+        logger.info("Starting price refresh for existing URLs...")
         async with session_factory() as session:
             source_repo = SourceRepository(session)
             sources = await source_repo.get_enabled()
 
+        total_refreshed = 0
         for source in sources:
             if registry.has_scraper(source.scraper_key):
-                logger.info("Starting scrape for %s", source.name)
-                count = await run_scrape(
+                logger.info("Refreshing prices for %s", source.name)
+                count = await run_price_update(
                     source,
                     registry,
                     session_factory,
-                    image_storage,
                     concurrency=config.scrape_concurrent,
                     scrape_delay=config.scrape_delay,
                 )
-                logger.info("Scraped %d items from %s", count, source.name)
-    else:
-        logger.info("Skipping crawl (--skip-crawl)")
+                total_refreshed += count
+                logger.info("Refreshed %d prices from %s", count, source.name)
+        logger.info("Price refresh complete: %d rows refreshed", total_refreshed)
 
-    # Run enrichment in batches until all records are processed
-    if not skip_enrichment:
-        logger.info("Starting enrichment...")
-        total_enriched = 0
-        batch_size = 50
-        while True:
-            enriched = await run_enrichment(session_factory, pipeline, limit=batch_size)
-            total_enriched += enriched
-            if enriched < batch_size:
-                break
-            logger.info("Enriched %d records so far...", total_enriched)
-        logger.info("Enriched %d records total", total_enriched)
-    else:
-        logger.info("Skipping enrichment (--skip-enrichment)")
-
-    # Download cover art from MusicBrainz CAA for records missing an image
-    if not skip_image_enrichment:
-        logger.info("Enriching images from MusicBrainz Cover Art Archive...")
-        total_img = 0
-        batch_size = 50
-        while True:
-            enriched = await enrich_images(session_factory, image_storage, limit=batch_size)
-            total_img += enriched
-            if enriched < batch_size:
-                break
-            logger.info("Enriched %d images so far...", total_img)
-        logger.info("Enriched %d images total", total_img)
-    else:
-        logger.info("Skipping image enrichment (--skip-image-enrichment)")
-
-    # Backfill slugs for records that don't have one yet
-    logger.info("Backfilling slugs...")
-    total_slugged = 0
-    while True:
-        slugged = await backfill_slugs(session_factory, limit=200)
-        total_slugged += slugged
-        if slugged < 200:
-            break
-        logger.info("Slugified %d records so far...", total_slugged)
-    logger.info("Slugified %d records total", total_slugged)
-
-    # Generate OG preview images for records that don't have them yet
-    if not skip_image_generation:
-        logger.info("Generating OG preview images...")
-        total_og = 0
-        while True:
-            generated = await generate_og_images(session_factory, og_generator, limit=50)
-            total_og += generated
-            if generated < 50:
-                break
-            logger.info("Generated %d OG images so far...", total_og)
-        logger.info("Generated %d OG images total", total_og)
-    else:
-        logger.info("Skipping OG image generation (--skip-image-generation)")
-
-    await yt.close()
-    await exa.close()
-    await og_generator.close()
-    await image_storage.close()
-    await engine.dispose()
+        logger.info(
+            "=== Cycle complete. Sleeping %s until next cycle ===",
+            _CYCLE_INTERVAL,
+        )
+        await asyncio.sleep(_CYCLE_INTERVAL.total_seconds())
 
 
 if __name__ == "__main__":

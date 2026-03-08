@@ -27,6 +27,35 @@ class MusicBrainzClient(BaseEnricher):
                 await asyncio.sleep(wait)
             self._last_request = asyncio.get_event_loop().time()
 
+    @staticmethod
+    def _is_vinyl(release: dict) -> bool:
+        """Check whether any medium on a release is a vinyl format."""
+        for medium in release.get("medium-list", []):
+            fmt = (medium.get("format") or "").lower()
+            if "vinyl" in fmt:
+                return True
+        return False
+
+    @staticmethod
+    def _pick_best(releases: list[dict], min_score: int = 80) -> dict | None:
+        """Pick the best release, preferring vinyl over other formats.
+
+        Among all releases with ``ext:score >= min_score``, return the
+        first vinyl release.  If none of the qualifying releases are
+        vinyl, fall back to the first qualifying release regardless of
+        format.
+        """
+        best_any: dict | None = None
+        for release in releases:
+            score = int(release.get("ext:score", 0))
+            if score < min_score:
+                continue
+            if best_any is None:
+                best_any = release
+            if MusicBrainzClient._is_vinyl(release):
+                return release
+        return best_any
+
     async def enrich(self, artist: str, title: str) -> EnrichmentResult | None:
         await self._rate_limit()
 
@@ -38,7 +67,7 @@ class MusicBrainzClient(BaseEnricher):
                     musicbrainzngs.search_releases,
                     artist=artist,
                     release=title,
-                    limit=5,
+                    limit=25,
                 ),
             )
         except Exception:
@@ -49,13 +78,7 @@ class MusicBrainzClient(BaseEnricher):
         if not releases:
             return None
 
-        # Find best match (score > 80)
-        best = None
-        for release in releases:
-            score = int(release.get("ext:score", 0))
-            if score >= 80:
-                best = release
-                break
+        best = self._pick_best(releases)
 
         if not best:
             return None
