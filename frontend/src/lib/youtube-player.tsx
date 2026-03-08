@@ -18,10 +18,14 @@ export interface PlaylistItem {
 interface YouTubePlayerContextValue {
   /** Currently playing item, or null when nothing is playing. */
   current: PlaylistItem | null;
+  /** Whether there is a previous track available. */
+  hasPrev: boolean;
   /** Whether there is a next track available. */
   hasNext: boolean;
   /** Start playing a URL. If it exists in the playlist, playback continues from there. */
   play: (url: string, title: string) => void;
+  /** Skip to the previous playlist item that has a different video URL. */
+  previous: () => void;
   /** Skip to the next playlist item that has a different video URL. */
   next: () => void;
   /** Stop playback and dismiss the player. */
@@ -32,8 +36,10 @@ interface YouTubePlayerContextValue {
 
 const YouTubePlayerContext = createContext<YouTubePlayerContextValue>({
   current: null,
+  hasPrev: false,
   hasNext: false,
   play: () => {},
+  previous: () => {},
   next: () => {},
   close: () => {},
   setPlaylist: () => {},
@@ -46,6 +52,17 @@ export function YouTubePlayerProvider({ children }: { children: ReactNode }) {
   // Index of the currently playing item inside the playlist (-1 = not found / freestanding play).
   const indexRef = useRef(-1);
 
+  const findPrev = useCallback((): PlaylistItem | null => {
+    const list = playlistRef.current;
+    const idx = indexRef.current;
+    if (idx <= 0) return null;
+    // Find previous item with a different URL
+    for (let i = idx - 1; i >= 0; i--) {
+      if (list[i].url !== list[idx]?.url) return list[i];
+    }
+    return null;
+  }, []);
+
   const findNext = useCallback((): PlaylistItem | null => {
     const list = playlistRef.current;
     const idx = indexRef.current;
@@ -57,48 +74,49 @@ export function YouTubePlayerProvider({ children }: { children: ReactNode }) {
     return null;
   }, []);
 
+  const [hasPrev, setHasPrev] = useState(false);
   const [hasNext, setHasNext] = useState(false);
 
-  const updateHasNext = useCallback(() => {
+  const updateNav = useCallback(() => {
+    setHasPrev(findPrev() !== null);
     setHasNext(findNext() !== null);
-  }, [findNext]);
+  }, [findPrev, findNext]);
 
   const play = useCallback(
     (url: string, title: string) => {
-      const item = { url, title };
-      setCurrent(item);
+      setCurrent({ url, title });
       // Try to find this url in the playlist to anchor the index
       const idx = playlistRef.current.findIndex((p) => p.url === url);
       indexRef.current = idx;
-      updateHasNext();
+      updateNav();
     },
-    [updateHasNext],
+    [updateNav],
   );
+
+  const jumpTo = useCallback(
+    (item: PlaylistItem) => {
+      const idx = playlistRef.current.findIndex((p) => p.url === item.url);
+      indexRef.current = idx;
+      setCurrent(item);
+      updateNav();
+    },
+    [updateNav],
+  );
+
+  const previous = useCallback(() => {
+    const prevItem = findPrev();
+    if (prevItem) jumpTo(prevItem);
+  }, [findPrev, jumpTo]);
 
   const next = useCallback(() => {
     const nextItem = findNext();
-    if (nextItem) {
-      const idx = playlistRef.current.findIndex(
-        (p) => p.url === nextItem.url,
-      );
-      indexRef.current = idx;
-      setCurrent(nextItem);
-      setHasNext(
-        (() => {
-          const list = playlistRef.current;
-          if (idx < 0 || idx >= list.length - 1) return false;
-          for (let i = idx + 1; i < list.length; i++) {
-            if (list[i].url !== list[idx]?.url) return true;
-          }
-          return false;
-        })(),
-      );
-    }
-  }, [findNext]);
+    if (nextItem) jumpTo(nextItem);
+  }, [findNext, jumpTo]);
 
   const close = useCallback(() => {
     setCurrent(null);
     indexRef.current = -1;
+    setHasPrev(false);
     setHasNext(false);
   }, []);
 
@@ -110,14 +128,14 @@ export function YouTubePlayerProvider({ children }: { children: ReactNode }) {
         const idx = items.findIndex((p) => p.url === current.url);
         indexRef.current = idx;
       }
-      updateHasNext();
+      updateNav();
     },
-    [current, updateHasNext],
+    [current, updateNav],
   );
 
   const value = useMemo(
-    () => ({ current, hasNext, play, next, close, setPlaylist }),
-    [current, hasNext, play, next, close, setPlaylist],
+    () => ({ current, hasPrev, hasNext, play, previous, next, close, setPlaylist }),
+    [current, hasPrev, hasNext, play, previous, next, close, setPlaylist],
   );
 
   return (

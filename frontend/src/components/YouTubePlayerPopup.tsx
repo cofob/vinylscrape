@@ -18,7 +18,7 @@ function extractVideoId(url: string): string | null {
 }
 
 export default function YouTubePlayerPopup() {
-  const { current, hasNext, next, close } = useYouTubePlayer();
+  const { current, hasPrev, hasNext, previous, next, close } = useYouTubePlayer();
   const [collapsed, setCollapsed] = useState(true);
 
   if (!current) return null;
@@ -56,6 +56,25 @@ export default function YouTubePlayerPopup() {
           <p className="text-white text-xs truncate">{current.title}</p>
         </button>
         <div className="flex items-center gap-1 shrink-0">
+          {/* Previous button */}
+          {hasPrev && (
+            <button
+              onClick={previous}
+              className="p-1 rounded-lg text-neutral-400 hover:text-white hover:bg-neutral-700 transition-colors"
+              aria-label="Previous"
+              title="Previous"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+                className="w-4 h-4"
+              >
+                <rect x="5" y="4" width="2" height="16" />
+                <path d="M18 4L8 12l10 8V4z" />
+              </svg>
+            </button>
+          )}
           {/* Next button */}
           {hasNext && (
             <button
