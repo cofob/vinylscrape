@@ -5,7 +5,7 @@ from typing import cast
 
 import musicbrainzngs
 
-from vinylscrape.enrichment.base import BaseEnricher, EnrichmentResult
+from vinylscrape.enrichment.base import BaseEnricher, EnrichmentResult, EnrichmentTrack
 
 logger = logging.getLogger(__name__)
 
@@ -107,10 +107,11 @@ class MusicBrainzClient(BaseEnricher):
         for tag in tags:
             genres.append(tag.get("name", ""))
 
-        # Try to get YouTube URL from relations
+        # Fetch YouTube URL and tracklist from the release in one API call
         youtube_url = None
+        tracklist: list[EnrichmentTrack] = []
         if mb_id:
-            youtube_url = await self._get_youtube_from_relations(mb_id)
+            youtube_url, tracklist = await self._get_release_details(mb_id)
 
         return EnrichmentResult(
             musicbrainz_id=mb_id,
@@ -119,9 +120,13 @@ class MusicBrainzClient(BaseEnricher):
             year=year,
             genres=genres,
             youtube_url=youtube_url,
+            tracklist=tracklist,
         )
 
-    async def _get_youtube_from_relations(self, release_id: str) -> str | None:
+    async def _get_release_details(
+        self, release_id: str
+    ) -> tuple[str | None, list[EnrichmentTrack]]:
+        """Fetch YouTube URL and tracklist for a release in a single API call."""
         await self._rate_limit()
 
         try:
@@ -131,17 +136,41 @@ class MusicBrainzClient(BaseEnricher):
                 partial(
                     musicbrainzngs.get_release_by_id,
                     release_id,
-                    includes=["url-rels"],
+                    includes=["url-rels", "recordings"],
                 ),
             )
         except Exception:
-            logger.exception("Failed to get relations for release %s", release_id)
-            return None
+            logger.exception("Failed to get release details for %s", release_id)
+            return None, []
 
         release = result.get("release", {})
+
+        # Extract YouTube URL from relations
+        youtube_url: str | None = None
         for rel in release.get("url-relation-list", []):
             url = rel.get("target", "")
             if "youtube.com" in url or "youtu.be" in url:
-                return cast(str, url)
+                youtube_url = cast(str, url)
+                break
 
-        return None
+        # Extract tracklist from media
+        tracks: list[EnrichmentTrack] = []
+        for medium in release.get("medium-list", []):
+            for track in medium.get("track-list", []):
+                recording = track.get("recording", {})
+                position = track.get("number", "")
+                title = recording.get("title") or track.get("title", "")
+                if not position or not title:
+                    continue
+                # Convert length in ms to "M:SS" string
+                duration: str | None = None
+                length = recording.get("length")
+                if length:
+                    try:
+                        total_secs = int(length) // 1000
+                        duration = f"{total_secs // 60}:{total_secs % 60:02d}"
+                    except (ValueError, TypeError):
+                        pass
+                tracks.append(EnrichmentTrack(position=position, title=title, duration=duration))
+
+        return youtube_url, tracks

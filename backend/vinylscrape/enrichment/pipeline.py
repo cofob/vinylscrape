@@ -41,6 +41,7 @@ class EnrichmentPipeline:
             result.label = mb_result.label
             result.year = mb_result.year
             result.genres = mb_result.genres
+            result.tracklist = mb_result.tracklist
             if mb_result.youtube_url:
                 result.youtube_url = mb_result.youtube_url
 

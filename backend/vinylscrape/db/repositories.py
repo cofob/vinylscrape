@@ -564,6 +564,13 @@ class TrackRepository:
             self.session.add(track)
         await self.session.flush()
 
+    async def count_for_vinyl(self, vinyl_id: uuid.UUID) -> int:
+        """Return the number of tracks for a vinyl record."""
+        result = await self.session.execute(
+            select(func.count(Track.id)).where(Track.vinyl_id == vinyl_id)
+        )
+        return result.scalar_one()
+
 
 class StatsRepository:
     def __init__(self, session: AsyncSession):

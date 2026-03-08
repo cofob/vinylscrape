@@ -41,6 +41,7 @@ class EnrichmentItem(TypedDict):
     artist: str
     title: str
     yt_urls: list[str]
+    has_tracklist: bool
 
 
 def _slugify(text: str) -> str:
@@ -394,6 +395,17 @@ async def _enrich_one(
                         existing.label = result.label
                     if result.year and not existing.year:
                         existing.year = result.year
+                    # Save MusicBrainz tracklist if canonical still has none
+                    # after the merge (neither source provided tracks).
+                    if result.tracklist:
+                        track_repo = TrackRepository(session)
+                        existing_tracks = await track_repo.count_for_vinyl(existing.id)
+                        if existing_tracks == 0:
+                            tracks = [
+                                Track(position=t.position, title=t.title, duration=t.duration)
+                                for t in result.tracklist
+                            ]
+                            await track_repo.replace_for_vinyl(existing.id, tracks)
                     existing.enrichment_attempted_at = now
                     await session.commit()
                     return True
@@ -407,6 +419,15 @@ async def _enrich_one(
                 v.label = result.label
             if result.year and not v.year:
                 v.year = result.year
+
+            # Save tracklist from MusicBrainz if the source didn't provide one
+            if result.tracklist and not item["has_tracklist"]:
+                track_repo = TrackRepository(session)
+                tracks = [
+                    Track(position=t.position, title=t.title, duration=t.duration)
+                    for t in result.tracklist
+                ]
+                await track_repo.replace_for_vinyl(v.id, tracks)
 
             # Mark as attempted regardless of outcome so it isn't retried every run
             v.enrichment_attempted_at = now
@@ -445,6 +466,7 @@ async def run_enrichment(
                     "artist": v.artist,
                     "title": v.title,
                     "yt_urls": [t.youtube_url for t in v.tracklist if t.youtube_url],
+                    "has_tracklist": bool(v.tracklist),
                 }
             )
 
