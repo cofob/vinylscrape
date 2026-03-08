@@ -1,0 +1,124 @@
+import asyncio
+import logging
+from functools import partial
+from typing import cast
+
+import musicbrainzngs
+
+from vinylscrape.enrichment.base import BaseEnricher, EnrichmentResult
+
+logger = logging.getLogger(__name__)
+
+
+class MusicBrainzClient(BaseEnricher):
+    """MusicBrainz API client with rate limiting (1 req/sec)."""
+
+    def __init__(self, app_name: str = "VinylScrape/1.0"):
+        musicbrainzngs.set_useragent(app_name, "1.0", "https://github.com/cofob/vinylscrape")
+        self._lock = asyncio.Lock()
+        self._last_request = 0.0
+
+    async def _rate_limit(self) -> None:
+        """Ensure at least 1 second between requests."""
+        async with self._lock:
+            now = asyncio.get_event_loop().time()
+            wait = max(0, 1.0 - (now - self._last_request))
+            if wait > 0:
+                await asyncio.sleep(wait)
+            self._last_request = asyncio.get_event_loop().time()
+
+    async def enrich(self, artist: str, title: str) -> EnrichmentResult | None:
+        await self._rate_limit()
+
+        try:
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None,
+                partial(
+                    musicbrainzngs.search_releases,
+                    artist=artist,
+                    release=title,
+                    limit=5,
+                ),
+            )
+        except Exception:
+            logger.exception("MusicBrainz search failed for %s - %s", artist, title)
+            return None
+
+        releases = result.get("release-list", [])
+        if not releases:
+            return None
+
+        # Find best match (score > 80)
+        best = None
+        for release in releases:
+            score = int(release.get("ext:score", 0))
+            if score >= 80:
+                best = release
+                break
+
+        if not best:
+            return None
+
+        mb_id = best.get("id")
+        release_group_id = best.get("release-group", {}).get("id")
+
+        # Extract label
+        label = None
+        label_info = best.get("label-info-list", [])
+        if label_info:
+            label = label_info[0].get("label", {}).get("name")
+
+        # Extract year
+        year = None
+        date = best.get("date", "")
+        if date and len(date) >= 4:
+            try:
+                year = int(date[:4])
+            except ValueError:
+                pass
+
+        # Extract genres from tags
+        genres = []
+        tags = best.get("tag-list", [])
+        for tag in tags:
+            genres.append(tag.get("name", ""))
+
+        # Try to get YouTube URL from relations
+        youtube_url = None
+        if mb_id:
+            youtube_url = await self._get_youtube_from_relations(mb_id)
+
+        return EnrichmentResult(
+            musicbrainz_id=mb_id,
+            release_group_id=release_group_id,
+            label=label,
+            year=year,
+            genres=genres,
+            youtube_url=youtube_url,
+        )
+
+    async def _get_youtube_from_relations(self, release_id: str) -> str | None:
+        await self._rate_limit()
+
+        try:
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None,
+                partial(
+                    musicbrainzngs.get_release_by_id,
+                    release_id,
+                    includes=["url-rels"],
+                ),
+            )
+        except Exception:
+            logger.exception("Failed to get relations for release %s", release_id)
+            return None
+
+        release = result.get("release", {})
+        for rel in release.get("url-relation-list", []):
+            url = rel.get("target", "")
+            if "youtube.com" in url or "youtu.be" in url:
+                return cast(str, url)
+
+        return None

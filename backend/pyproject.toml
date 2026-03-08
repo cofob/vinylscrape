@@ -1,0 +1,49 @@
+[project]
+name = "vinylscrape"
+version = "0.1.0"
+description = "Service for aggregating and searching vinyl records from Georgian shops"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]",
+    "sqlalchemy[asyncio]>=2.0",
+    "asyncpg",
+    "alembic",
+    "dishka>=1.0",
+    "pydantic-settings",
+    "httpx",
+    "beautifulsoup4",
+    "lxml",
+    "musicbrainzngs",
+    "apscheduler>=4.0.0a1",
+    "aioboto3",
+    "pillow",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["vinylscrape"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.19.1",
+    "ruff>=0.15.5",
+]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+
+[[tool.mypy.overrides]]
+module = ["aioboto3", "musicbrainzngs"]
+ignore_missing_imports = true
