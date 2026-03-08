@@ -51,7 +51,7 @@ export default function AddToCartButton({
       <button
         onClick={handleClick}
         title={inCart ? "Remove from cart" : "Add to cart"}
-        className={`p-1.5 rounded-lg transition-colors ${
+        className={`p-2.5 sm:p-1.5 rounded-lg transition-colors ${
           inCart
             ? "bg-amber-500 text-white hover:bg-amber-600"
             : "bg-neutral-100 dark:bg-neutral-800 text-neutral-500 hover:bg-amber-100 hover:text-amber-600 dark:hover:bg-amber-900/30 dark:hover:text-amber-400"
@@ -65,7 +65,7 @@ export default function AddToCartButton({
           strokeWidth={2}
           strokeLinecap="round"
           strokeLinejoin="round"
-          className="w-4 h-4"
+          className="w-5 h-5 sm:w-4 sm:h-4"
         >
           {inCart ? (
             // Check icon

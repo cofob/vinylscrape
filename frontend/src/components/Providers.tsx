@@ -4,6 +4,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { NuqsAdapter } from "nuqs/adapters/next/app";
 import { useState, type ReactNode } from "react";
 import { CartProvider } from "@/lib/cart";
+import { YouTubePlayerProvider } from "@/lib/youtube-player";
+import YouTubePlayerPopup from "@/components/YouTubePlayerPopup";
 
 export default function Providers({ children }: { children: ReactNode }) {
   const [queryClient] = useState(
@@ -21,7 +23,12 @@ export default function Providers({ children }: { children: ReactNode }) {
   return (
     <QueryClientProvider client={queryClient}>
       <NuqsAdapter>
-        <CartProvider>{children}</CartProvider>
+        <CartProvider>
+          <YouTubePlayerProvider>
+            {children}
+            <YouTubePlayerPopup />
+          </YouTubePlayerProvider>
+        </CartProvider>
       </NuqsAdapter>
     </QueryClientProvider>
   );

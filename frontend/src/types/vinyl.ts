@@ -10,6 +10,7 @@ export interface VinylListItem {
   in_stock: boolean;
   source_count: number;
   slug: string | null;
+  youtube_url: string | null;
 }
 
 export interface VinylSourceOut {

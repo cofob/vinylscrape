@@ -7,6 +7,7 @@ import { searchVinyls, getGenres, getSources, getStats } from "@/lib/api";
 import SearchBar from "@/components/SearchBar";
 import VinylGrid from "@/components/VinylGrid";
 import FilterPanel from "@/components/FilterPanel";
+import { useYouTubePlayer } from "@/lib/youtube-player";
 
 function formatLastUpdated(value: string | null) {
   if (!value) {
@@ -114,6 +115,18 @@ export default function HomeContent() {
   );
   const total = data?.pages[0]?.total ?? 0;
   const loadedCount = items.length;
+
+  // Keep the YouTube player playlist in sync with the loaded catalog items.
+  const { setPlaylist } = useYouTubePlayer();
+  useEffect(() => {
+    const playlist = items
+      .filter((v) => v.youtube_url)
+      .map((v) => ({
+        url: v.youtube_url!,
+        title: `${v.artist} — ${v.title}`,
+      }));
+    setPlaylist(playlist);
+  }, [items, setPlaylist]);
 
   useEffect(() => {
     if (!loadMoreRef.current || !hasNextPage || isFetchingNextPage) {

@@ -5,6 +5,7 @@ import Link from "next/link";
 import type { VinylListItem } from "@/types/vinyl";
 import PriceTag from "./PriceTag";
 import AddToCartButton from "./AddToCartButton";
+import { useYouTubePlayer } from "@/lib/youtube-player";
 
 interface VinylCardProps {
   vinyl: VinylListItem;
@@ -12,6 +13,16 @@ interface VinylCardProps {
 }
 
 export default function VinylCard({ vinyl, preloadImage = false }: VinylCardProps) {
+  const { play } = useYouTubePlayer();
+
+  const handlePlay = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (vinyl.youtube_url) {
+      play(vinyl.youtube_url, `${vinyl.artist} — ${vinyl.title}`);
+    }
+  };
+
   return (
     <Link
       href={`/vinyl/${vinyl.slug ?? vinyl.id}`}
@@ -40,8 +51,24 @@ export default function VinylCard({ vinyl, preloadImage = false }: VinylCardProp
             SOLD OUT
           </div>
         )}
-        {/* Cart button overlay */}
-        <div className="absolute bottom-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
+        {/* Action buttons overlay — always visible on mobile, hover-only on sm+ */}
+        <div className="absolute bottom-2 right-2 flex items-center gap-1.5 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+          {vinyl.youtube_url && (
+            <button
+              onClick={handlePlay}
+              title="Play"
+              className="p-2.5 sm:p-1.5 rounded-lg transition-colors bg-neutral-100 dark:bg-neutral-800 text-neutral-500 hover:bg-red-100 hover:text-red-600 dark:hover:bg-red-900/30 dark:hover:text-red-400"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+                className="w-5 h-5 sm:w-4 sm:h-4"
+              >
+                <path d="M8 5v14l11-7z" />
+              </svg>
+            </button>
+          )}
           <AddToCartButton
             compact
             item={{

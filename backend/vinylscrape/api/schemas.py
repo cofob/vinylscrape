@@ -48,6 +48,7 @@ class VinylListItem(BaseModel):
     in_stock: bool = False
     source_count: int = 0
     slug: str | None = None
+    youtube_url: str | None = None
 
 
 class VinylDetail(BaseModel):

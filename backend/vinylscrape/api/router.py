@@ -85,6 +85,7 @@ def _vinyl_to_list_item(vinyl: Vinyl) -> VinylListItem:
         in_stock=any_in_stock,
         source_count=len(vinyl.sources),
         slug=vinyl.slug,
+        youtube_url=vinyl.youtube_url,
     )
 
 
