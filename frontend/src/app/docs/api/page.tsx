@@ -109,7 +109,7 @@ interface Endpoint {
   exampleResponse: string;
 }
 
-const BASE_URL = "https://vinylscrape.example.com";
+const BASE_URL = "https://vinylscrape.cfb.wtf";
 
 const ENDPOINTS: Endpoint[] = [
   {
