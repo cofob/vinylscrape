@@ -47,11 +47,13 @@ export const metadata: Metadata = {
     url: "https://vinylscrape.cfb.wtf",
     title: "VinylScrape — Search Vinyl Records from Georgian Shops",
     description: "Search and compare vinyl records from Georgian shops",
+    images: [{ url: "/og/main.png", width: 1200, height: 630 }],
   },
   twitter: {
-    card: "summary",
+    card: "summary_large_image",
     title: "VinylScrape",
     description: "Search and compare vinyl records from Georgian shops",
+    images: ["/og/main.png"],
   },
 };
 

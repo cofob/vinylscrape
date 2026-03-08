@@ -5,6 +5,19 @@ export const metadata: Metadata = {
   title: "API Reference",
   description:
     "REST API documentation for the VinylScrape vinyl record aggregator.",
+  openGraph: {
+    title: "API Reference | VinylScrape",
+    description:
+      "REST API documentation for the VinylScrape vinyl record aggregator.",
+    images: [{ url: "/og/api.png", width: 1200, height: 630 }],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "API Reference | VinylScrape",
+    description:
+      "REST API documentation for the VinylScrape vinyl record aggregator.",
+    images: ["/og/api.png"],
+  },
 };
 
 /* ─── tiny helpers ─────────────────────────────────────────── */

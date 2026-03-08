@@ -5,6 +5,19 @@ export const metadata: Metadata = {
   title: "About",
   description:
     "Learn about VinylScrape, a vinyl record search aggregator for Georgian shops.",
+  openGraph: {
+    title: "About VinylScrape",
+    description:
+      "A unified search and price-comparison tool for vinyl records sold in Georgian shops.",
+    images: [{ url: "/og/about.png", width: 1200, height: 630 }],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "About VinylScrape",
+    description:
+      "A unified search and price-comparison tool for vinyl records sold in Georgian shops.",
+    images: ["/og/about.png"],
+  },
 };
 
 export default function AboutPage() {

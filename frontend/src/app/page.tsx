@@ -9,6 +9,19 @@ export const metadata: Metadata = {
   alternates: {
     canonical: "/",
   },
+  openGraph: {
+    title: "VinylScrape — Search Vinyl Records from Georgian Shops",
+    description:
+      "Compare prices, check availability, and find the best deals on vinyl records in Georgia.",
+    images: [{ url: "/og/main.png", width: 1200, height: 630 }],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "VinylScrape — Search Vinyl Records from Georgian Shops",
+    description:
+      "Compare prices, check availability, and find the best deals on vinyl records in Georgia.",
+    images: ["/og/main.png"],
+  },
 };
 
 export default function HomePage() {
