@@ -108,7 +108,10 @@ class VinylSource(Base):
     vinyl: Mapped["Vinyl"] = relationship(back_populates="sources")
     source: Mapped["Source"] = relationship(back_populates="vinyl_sources")
 
-    __table_args__ = (Index("ix_vinyl_source_vinyl_source", "vinyl_id", "source_id", unique=True),)
+    __table_args__ = (
+        Index("ix_vinyl_source_vinyl_source", "vinyl_id", "source_id"),
+        Index("ix_vinyl_source_url", "external_url", "source_id", unique=True),
+    )
 
 
 class Genre(Base):

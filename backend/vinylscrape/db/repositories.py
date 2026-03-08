@@ -266,9 +266,10 @@ class VinylRepository:
     async def merge_into(self, duplicate: Vinyl, canonical: Vinyl) -> None:
         """Merge *duplicate* into *canonical* and delete *duplicate*.
 
-        All VinylSource rows are re-pointed to *canonical*, skipping any
-        that would violate the unique (vinyl_id, source_id) constraint
-        (i.e. *canonical* already has a listing for that source).
+        All VinylSource rows are re-pointed to *canonical* so that their
+        ``external_url`` values remain in the database.  This prevents the
+        crawler from treating those URLs as never-seen and re-scraping them
+        on every run.
         Tracks are moved only when *canonical* currently has none.
         Genres are union-merged.
         Scalar fields (label, year, etc.) fill gaps in *canonical*.
@@ -280,13 +281,15 @@ class VinylRepository:
             return
 
         # --- VinylSource rows ---
-        existing_source_ids = {vs.source_id for vs in can.sources}
+        # Collect external URLs the canonical already owns so we can skip
+        # true duplicates (same source *and* same URL).
+        existing_keys = {(vs.source_id, vs.external_url) for vs in can.sources}
         for vs in dup.sources:
-            if vs.source_id in existing_source_ids:
-                # canonical already has this source — discard the duplicate row
+            if (vs.source_id, vs.external_url) in existing_keys:
+                # Exact same listing already on canonical — safe to discard.
                 await self.session.execute(delete(VinylSource).where(VinylSource.id == vs.id))
             else:
-                # Re-point to canonical
+                # Re-point to canonical (different URL or different source).
                 await self.session.execute(
                     update(VinylSource).where(VinylSource.id == vs.id).values(vinyl_id=can.id)
                 )
@@ -355,13 +358,20 @@ class VinylSourceRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def find(self, vinyl_id: uuid.UUID, source_id: uuid.UUID) -> VinylSource | None:
+    async def find(
+        self,
+        vinyl_id: uuid.UUID,
+        source_id: uuid.UUID,
+        external_url: str | None = None,
+    ) -> VinylSource | None:
         stmt = select(VinylSource).where(
             VinylSource.vinyl_id == vinyl_id,
             VinylSource.source_id == source_id,
         )
+        if external_url is not None:
+            stmt = stmt.where(VinylSource.external_url == external_url)
         result = await self.session.execute(stmt)
-        return result.scalar_one_or_none()
+        return result.scalars().first()
 
     async def was_recently_scraped(
         self, external_url: str, source_id: uuid.UUID, since: datetime
@@ -384,7 +394,7 @@ class VinylSourceRepository:
         currency: str,
         in_stock: bool,
     ) -> VinylSource:
-        existing = await self.find(vinyl_id, source_id)
+        existing = await self.find(vinyl_id, source_id, external_url)
         if existing:
             existing.price = price
             existing.currency = currency
